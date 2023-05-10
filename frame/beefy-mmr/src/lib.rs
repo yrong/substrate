@@ -33,16 +33,18 @@
 //!
 //! and thanks to versioning can be easily updated in the future.
 
+use codec::{Decode, Encode};
+use scale_info::TypeInfo;
 use sp_runtime::traits::{Convert, Member};
 use sp_std::prelude::*;
 
 use pallet_mmr::{LeafDataProvider, ParentNumberAndHash};
 use sp_consensus_beefy::{
 	mmr::{BeefyAuthoritySet, BeefyDataProvider, BeefyNextAuthoritySet, MmrLeaf, MmrLeafVersion},
-	ValidatorSet as BeefyValidatorSet,
+	AuthorityIndex, ValidatorSet as BeefyValidatorSet,
 };
 
-use frame_support::{crypto::ecdsa::ECDSAExt, traits::Get};
+use frame_support::traits::Get;
 
 pub use pallet::*;
 
@@ -70,17 +72,18 @@ where
 	}
 }
 
-/// Convert BEEFY secp256k1 public keys into Ethereum addresses
+#[derive(Decode, Encode, Debug, PartialEq, Clone, TypeInfo)]
+#[allow(missing_docs)]
+pub struct AuthorityEntry<T: pallet_beefy::Config> {
+	id: T::BeefyId,
+	index: AuthorityIndex,
+}
+
+/// Convert just encode the BEEFY AuthorityEntry which contains public key and index of that key
 pub struct BeefyEcdsaToEthereum;
-impl Convert<sp_consensus_beefy::crypto::AuthorityId, Vec<u8>> for BeefyEcdsaToEthereum {
-	fn convert(beefy_id: sp_consensus_beefy::crypto::AuthorityId) -> Vec<u8> {
-		sp_core::ecdsa::Public::from(beefy_id)
-			.to_eth_address()
-			.map(|v| v.to_vec())
-			.map_err(|_| {
-				log::error!(target: "runtime::beefy", "Failed to convert BEEFY PublicKey to ETH address!");
-			})
-			.unwrap_or_default()
+impl<T: pallet_beefy::Config> Convert<AuthorityEntry<T>, Vec<u8>> for BeefyEcdsaToEthereum {
+	fn convert(beefy_authority: AuthorityEntry<T>) -> Vec<u8> {
+		beefy_authority.encode()
 	}
 }
 
@@ -113,7 +116,7 @@ pub mod pallet {
 		/// and later to Ethereum Addresses (160 bits) to simplify using them on Ethereum chain,
 		/// but the rest of the Substrate codebase is storing them compressed (33 bytes) for
 		/// efficiency reasons.
-		type BeefyAuthorityToMerkleLeaf: Convert<<Self as pallet_beefy::Config>::BeefyId, Vec<u8>>;
+		type BeefyAuthorityToMerkleLeaf: Convert<AuthorityEntry<Self>, Vec<u8>>;
 
 		/// The type expected for the leaf extra data
 		type LeafExtra: Member + codec::FullCodec;
@@ -184,23 +187,22 @@ impl<T: Config> Pallet<T> {
 	}
 
 	/// Returns details of a BEEFY authority set.
-	///
 	/// Details contain authority set id, authority set length and a merkle root,
-	/// constructed from uncompressed secp256k1 public keys converted to Ethereum addresses
-	/// of the next BEEFY authority set.
+	/// constructed from all AuthorityEntries of the next BEEFY authority set.
 	fn compute_authority_set(
 		validator_set: &BeefyValidatorSet<<T as pallet_beefy::Config>::BeefyId>,
 	) -> BeefyAuthoritySet<MerkleRootOf<T>> {
 		let id = validator_set.id();
-		let beefy_addresses = validator_set
-			.validators()
-			.into_iter()
-			.cloned()
-			.map(T::BeefyAuthorityToMerkleLeaf::convert)
-			.collect::<Vec<_>>();
-		let len = beefy_addresses.len() as u32;
+		let mut beefy_validators: Vec<Vec<u8>> = vec![];
+		for (i, x) in validator_set.validators.iter().enumerate() {
+			beefy_validators.push(T::BeefyAuthorityToMerkleLeaf::convert(AuthorityEntry {
+				id: x.clone(),
+				index: i as AuthorityIndex,
+			}))
+		}
+		let len = beefy_validators.len() as u32;
 		let root = binary_merkle_tree::merkle_root::<<T as pallet_mmr::Config>::Hashing, _>(
-			beefy_addresses,
+			beefy_validators,
 		)
 		.into();
 		BeefyAuthoritySet { id, len, root }

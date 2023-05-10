@@ -117,9 +117,9 @@ pub type ValidatorSetId = u64;
 #[derive(Decode, Encode, Debug, PartialEq, Clone, TypeInfo)]
 pub struct ValidatorSet<AuthorityId> {
 	/// Public keys of the validator set elements
-	validators: Vec<AuthorityId>,
+	pub validators: Vec<AuthorityId>,
 	/// Identifier of the validator set
-	id: ValidatorSetId,
+	pub id: ValidatorSetId,
 }
 
 impl<AuthorityId> ValidatorSet<AuthorityId> {
